@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>電影感山谷：three.js 數學技能參考範例</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    #info {
+      position: fixed; left: 16px; bottom: 14px; color: #fff; opacity: 0.75;
+      font: 13px/1.6 system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      text-shadow: 0 1px 3px #000; pointer-events: none;
+    }
+  </style>
+  <!-- 鎖定 three.js r186，與所有技能的目標版本一致 -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="info">電影感山谷 · 噪聲地形 + 大氣散射天空 + 指數霧 + 等速攝影機軌道</div>
+  <script type="module">
+    import * as THREE from "three";
+    import { Sky } from "three/addons/objects/Sky.js";
+    import { ImprovedNoise } from "three/addons/math/ImprovedNoise.js";
+
+    // ─── 渲染器：天空是 HDR，必須用色調映射，否則亮部直接爆白 ── threejs-math-atmosphere
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.55; // 起始值，依場景調整
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.5, 3000);
+
+    // ─── 地形高度函式：fBm + 脊狀噪聲，沿著環形河谷壓低 ── threejs-math-noise
+    const perlin = new ImprovedNoise(); // 固定排列表：不能設種子，要換圖樣就平移座標
+
+    function fbm(x, z, octaves) {
+      let sum = 0, amp = 0.5, freq = 1;
+      for (let i = 0; i < octaves; i++) {
+        sum += amp * perlin.noise(x * freq, z * freq, 7.31); // 第三軸取非整數，避開晶格點上的 0
+        freq *= 2.03; // 不用剛好 2，避免各層晶格對齊產生格紋
+        amp *= 0.5;
+      }
+      return sum;
+    }
+
+    function ridged(x, z, octaves) {
+      let sum = 0, amp = 0.5, freq = 1, weight = 1;
+      for (let i = 0; i < octaves; i++) {
+        let n = 1 - Math.abs(perlin.noise(x * freq, z * freq, 3.7)); // 折出尖銳山脊
+        n *= n * weight; // 平滑處的高頻細節較少，山脊才乾淨
+        weight = Math.min(n * 2, 1);
+        sum += amp * n;
+        freq *= 2.03;
+        amp *= 0.5;
+      }
+      return sum;
+    }
+
+    const VALLEY_RADIUS = 110;
+    const valleyCenter = (theta) => VALLEY_RADIUS + 14 * Math.sin(3 * theta); // 河谷中心線（極座標）
+
+    function terrainHeight(x, z) {
+      const r = Math.hypot(x, z);
+      const theta = Math.atan2(z, x);
+      const d = Math.abs(r - valleyCenter(theta)); // 到河谷中心線的距離
+      const t = THREE.MathUtils.clamp((d - 12) / 95, 0, 1);
+      const mask = t * t * (3 - 2 * t); // smoothstep：谷底平、兩側漸漸升起
+      const mountains = ridged(x * 0.006, z * 0.006, 6) * 95;
+      const hills = fbm(x * 0.02, z * 0.02, 4) * 6;
+      return mountains * mask + hills - 4;
+    }
+
+    // ─── 由數學建網格：頂點高度、頂點顏色，再算法線 ── threejs-math-procedural-geometry
+    const SIZE = 700, SEGMENTS = 320;
+    const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEGMENTS, SEGMENTS);
+    geometry.rotateX(-Math.PI / 2); // 先轉成 XZ 平面，之後直接改 y
+    const pos = geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      pos.setY(i, terrainHeight(pos.getX(i), pos.getZ(i)));
+    }
+    geometry.computeVertexNormals(); // 頂點都動過了，法線必須重算
+
+    // 依坡度與高度上色：谷底草地、陡坡岩石、高處積雪
+    const grass = new THREE.Color().setRGB(0.25, 0.33, 0.16, THREE.SRGBColorSpace);
+    const rock = new THREE.Color().setRGB(0.36, 0.33, 0.30, THREE.SRGBColorSpace);
+    const snow = new THREE.Color().setRGB(0.92, 0.93, 0.96, THREE.SRGBColorSpace);
+    const colors = new Float32Array(pos.count * 3);
+    const nrm = geometry.attributes.normal;
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      const slope = 1 - nrm.getY(i); // 0 = 平地，越大越陡
+      c.copy(grass).lerp(rock, THREE.MathUtils.smoothstep(slope, 0.12, 0.35));
+      c.lerp(snow, THREE.MathUtils.smoothstep(y, 42, 60) * (1 - THREE.MathUtils.smoothstep(slope, 0.35, 0.6)));
+      c.toArray(colors, i * 3);
+    }
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+    const terrain = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+    scene.add(terrain);
+
+    // 河面：低粗糙度，靠環境貼圖反射天空
+    const water = new THREE.Mesh(
+      new THREE.CircleGeometry(SIZE * 0.5, 96).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x0d2230, roughness: 0.08, metalness: 0.2 }),
+    );
+    water.position.y = -1.5;
+    scene.add(water);
+
+    // ─── 天空：Rayleigh/Mie 散射模型，太陽壓低在地平線上 ── threejs-math-atmosphere
+    const sky = new Sky();
+    sky.scale.setScalar(10000);
+    const skyU = sky.material.uniforms;
+    skyU.turbidity.value = 5;
+    skyU.rayleigh.value = 1.6;
+    skyU.mieCoefficient.value = 0.006;
+    skyU.mieDirectionalG.value = 0.85; // Henyey-Greenstein g：越接近 1，太陽周圍的光暈越集中
+    const sunDir = new THREE.Vector3().setFromSphericalCoords(
+      1,
+      THREE.MathUtils.degToRad(90 - 9), // 仰角 9°（phi 從 +Y 量起）
+      THREE.MathUtils.degToRad(140),
+    );
+    skyU.sunPosition.value.copy(sunDir);
+    scene.add(sky);
+
+    // 用天空烘出環境貼圖，讓地形與水面接收天空的漫射與反射
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const skyScene = new THREE.Scene();
+    skyScene.add(sky.clone());
+    scene.environment = pmrem.fromScene(skyScene).texture;
+    scene.environmentIntensity = 0.6;
+
+    const sun = new THREE.DirectionalLight(0xffd2a1, 2.6);
+    sun.position.copy(sunDir).multiplyScalar(500); // 光從太陽方向照向原點
+    scene.add(sun);
+
+    // 指數霧：遠山逐漸融入地平線。顏色取自畫面上的地平線，不是天空參數
+    // FogExp2 是 1 - exp(-(density·depth)²)，在 depth = 2.146 / density 時達到 99%
+    scene.fog = new THREE.FogExp2(0xbfae9c, 2.146 / 520);
+
+    // ─── 攝影機軌道：沿河谷的封閉 Catmull-Rom 曲線，以弧長參數等速前進 ── threejs-math-motion
+    const railPoints = [];
+    for (let i = 0; i < 24; i++) {
+      const theta = (i / 24) * Math.PI * 2;
+      const r = valleyCenter(theta);
+      const x = r * Math.cos(theta), z = r * Math.sin(theta);
+      railPoints.push(new THREE.Vector3(x, Math.max(terrainHeight(x, z), 0) + 26, z));
+    }
+    const rail = new THREE.CatmullRomCurve3(railPoints, true); // 預設 centripetal，不會打結
+    rail.arcLengthDivisions = 2000; // 長而彎的路徑需要更細的弧長表
+    const railLength = rail.getLength();
+    const SPEED = 14; // 每秒前進的世界單位
+
+    let u = 0;
+    const ahead = new THREE.Vector3();
+    const lookTarget = new THREE.Vector3();
+    const shakeNoise = new ImprovedNoise();
+    rail.getPointAt(0, camera.position);
+    rail.getPointAt(0.06, lookTarget);
+
+    const timer = new THREE.Timer();
+    timer.connect(document); // 分頁隱藏時 delta 為 0，回來不會暴衝
+
+    renderer.setAnimationLoop(animate);
+
+    function animate() {
+      timer.update(); // 不要傳 setAnimationLoop 的 timestamp：建地形耗時，第一幀的 timestamp 可能早於 Timer 建立，得到負的 delta
+      const dt = Math.min(timer.getDelta(), 1 / 30); // 夾住 dt，卡頓時不跳鏡
+      const t = timer.getElapsed();
+
+      // 弧長參數 u：getPointAt 讓每段速度一致（getPoint 在長短段之間會忽快忽慢）
+      u = (u + (SPEED * dt) / railLength) % 1;
+      rail.getPointAt(u, camera.position);
+      // 軌道控制點之間地形可能隆起：保持在地表上方
+      const ground = Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
+      camera.position.y = Math.max(camera.position.y, ground + 8);
+
+      // 看向前方的點，並用與幀率無關的指數阻尼平滑（不要寫 lerp(a, b, 0.1)）
+      rail.getPointAt((u + 0.06) % 1, ahead);
+      ahead.y -= 5; // 鏡頭略微俯視
+      const k = 2.5; // 衰減率（1/秒）
+      lookTarget.x = THREE.MathUtils.damp(lookTarget.x, ahead.x, k, dt);
+      lookTarget.y = THREE.MathUtils.damp(lookTarget.y, ahead.y, k, dt);
+      lookTarget.z = THREE.MathUtils.damp(lookTarget.z, ahead.z, k, dt);
+
+      // 手持感：低頻噪聲微晃，比 Math.random() 抖動自然
+      const s = 0.18;
+      camera.position.x += shakeNoise.noise(t * 0.4, 0.5, 0.5) * s;
+      camera.position.y += shakeNoise.noise(0.5, t * 0.4, 1.5) * s;
+      camera.lookAt(lookTarget);
+
+      skyU.time.value = t; // 天空內建的雲層只透過這個 uniform 移動
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
