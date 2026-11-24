@@ -1,5 +1,7 @@
 # Three.js Skills for Claude Code
 
+English · [繁體中文](README.zh-TW.md)
+
 Skill files that give Claude Code current, verified knowledge of three.js, so the code it writes runs on the release you actually install.
 
 The skills target **three.js r186** (`three@0.186`), React Three Fiber 9.8 with drei 10.7, and gltf-transform 4.5. Rendering examples use `WebGLRenderer`, directly or through React Three Fiber; the WebGPU and TSL section in every skill covers `WebGPURenderer`.
@@ -17,7 +19,12 @@ npx skills add cloudai-x/threejs-skills
 
 # also the math skills in math-skills/ (the CLI only searches skills/ without --full-depth)
 npx skills add cloudai-x/threejs-skills --full-depth
+
+# every skill, user-wide, for Claude Code, Codex and Antigravity CLI at once
+npx skills add cloudai-x/threejs-skills --full-depth -g -y --copy -s '*' -a claude-code -a codex -a antigravity-cli
 ```
+
+The last command writes to `~/.claude/skills`, `~/.agents/skills` (Codex) and `~/.gemini/config/skills` (Antigravity CLI). `--copy` avoids symlinks, which often need admin rights on Windows.
 
 Or manually. Claude Code loads skills from `~/.claude/skills/` (all your projects) or `.claude/skills/` (one project):
 
@@ -81,6 +88,10 @@ Claude Code loads a skill when your request matches its description. When you as
 - simulate a particle flow or strange attractor → `threejs-math-particles-fields`
 - move a camera along a smooth cinematic path → `threejs-math-motion`
 - add a sky, volumetric fog or light shafts → `threejs-math-atmosphere`
+
+## Examples
+
+[`examples/cinematic-valley/index.html`](examples/cinematic-valley/index.html) combines four math skills in one page: a ridged-fBm river valley, the Sky scattering model with exponential fog, and a camera flying a closed Catmull-Rom rail at constant speed with damped look-ahead and noise shake. Its comments are in Traditional Chinese and name the skill each part comes from. Serve the repo root over HTTP (`npx serve .`) and open `/examples/cinematic-valley/`.
 
 ## Skill File Structure
 
