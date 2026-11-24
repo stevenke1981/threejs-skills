@@ -14,6 +14,9 @@ With the [skills](https://skills.sh) CLI:
 
 ```bash
 npx skills add cloudai-x/threejs-skills
+
+# also the math skills in math-skills/ (the CLI only searches skills/ without --full-depth)
+npx skills add cloudai-x/threejs-skills --full-depth
 ```
 
 Or manually. Claude Code loads skills from `~/.claude/skills/` (all your projects) or `.claude/skills/` (one project):
@@ -23,9 +26,11 @@ git clone https://github.com/CloudAI-X/threejs-skills.git
 
 # all your projects
 mkdir -p ~/.claude/skills && cp -r threejs-skills/skills/* ~/.claude/skills/
+cp -r threejs-skills/math-skills/* ~/.claude/skills/
 
 # or one project (run from the project root)
 mkdir -p .claude/skills && cp -r threejs-skills/skills/* .claude/skills/
+cp -r threejs-skills/math-skills/* .claude/skills/
 ```
 
 ## Skills Included
@@ -46,6 +51,19 @@ mkdir -p .claude/skills && cp -r threejs-skills/skills/* .claude/skills/
 | **threejs-react-three-fiber** | React Three Fiber 9 and a verified set of drei helpers, on WebGL or WebGPU |
 | **threejs-asset-pipeline** | gltf-transform: Draco, meshopt, KTX2, WebP, and the matching loader setup      |
 
+### Math Skills
+
+The skills in `math-skills/` cover the math behind procedural modeling and film-style effects: noise, distance fields, generated meshes, simulated particles, camera motion and light in participating media. They follow the same layout and target the same release.
+
+| Skill                                | Covers                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| **threejs-math-noise**               | Hashes, value, gradient, simplex and Worley noise, fBm, domain warping, curl noise |
+| **threejs-math-sdf-raymarching**     | Signed distance functions, smooth booleans, sphere tracing, soft shadows, AO, fractals |
+| **threejs-math-procedural-geometry** | Parametric surfaces, curve frames and sweeps, supershapes, L-systems, marching cubes |
+| **threejs-math-particles-fields**    | Vector fields, integrators and stability, strange attractors, GPGPU and TSL compute |
+| **threejs-math-motion**              | Easing, frame-rate-independent damping, springs, quaternions, camera rails, shake |
+| **threejs-math-atmosphere**          | Rayleigh and Mie scattering, Beer–Lambert, volumetric fog and clouds, god rays, tone mapping |
+
 ## How It Works
 
 Claude Code loads a skill when your request matches its description. When you ask it to:
@@ -57,6 +75,12 @@ Claude Code loads a skill when your request matches its description. When you as
 - make a slow scene faster → `threejs-performance`
 - build the scene with React → `threejs-react-three-fiber`
 - shrink a glTF before shipping it → `threejs-asset-pipeline`
+- generate terrain, clouds or marble from noise → `threejs-math-noise`
+- raymarch a distance-field scene or fractal → `threejs-math-sdf-raymarching`
+- build a mesh from a formula, curve or L-system → `threejs-math-procedural-geometry`
+- simulate a particle flow or strange attractor → `threejs-math-particles-fields`
+- move a camera along a smooth cinematic path → `threejs-math-motion`
+- add a sky, volumetric fog or light shafts → `threejs-math-atmosphere`
 
 ## Skill File Structure
 
@@ -88,6 +112,11 @@ The skills were checked against the published `three@0.186.1` package and the of
 - shader chunk names exist, and no removed or renamed API appears in example code
 - every gltf-transform command and flag exists in the CLI, and every React Three Fiber element maps to a three.js class
 - every skill was reviewed against the library source, with rendering, timing and shader claims measured where possible
+
+The math skills had two more checks:
+
+- every example that creates its own renderer was run in Chrome on WebGL 2, and the WebGPU and TSL examples on the WebGL 2 fallback. Each one compiled and rendered without errors or warnings, and the frames were inspected
+- CPU-side numbers (integrator stability, attractor extents, frame-rate independence of damping and springs, curve frames, marching-cubes radii) were measured in Node
 
 If you find something that is wrong on the current release, please open an issue with the skill name, the line and the three.js version you use.
 
