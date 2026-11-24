@@ -97,8 +97,8 @@ window.addEventListener("resize", () => {
 const timer = new THREE.Timer();
 timer.connect(document);
 
-function animate(timestamp) {
-  timer.update(timestamp); // the setAnimationLoop timestamp (ms); omit the argument to read performance.now()
+function animate() {
+  timer.update(); // reads performance.now(); see the note on timestamps below
   const dt = Math.min(timer.getDelta(), 1 / 30);
   const now = timer.getElapsed();
   // ...
@@ -107,6 +107,7 @@ renderer.setAnimationLoop(animate);
 ```
 
 - `getDelta()` and `getElapsed()` return seconds. Both are fixed for the frame by `update()`, so calling them several times per frame gives the same value.
+- `update(timestamp)` measures from `performance.now()` at `new THREE.Timer()`. The `setAnimationLoop` timestamp is the frame's start time, which can be earlier than the construction when slow setup code (building geometry, baking textures) runs before the first frame: the first delta and `getElapsed()` are then negative. Checked in Chrome: a 0.8 s terrain build gave a first delta of -0.2 s, and a rail fraction driven by it went below 0 and threw inside `getPointAt`. Call `update()` without an argument.
 - Without `connect(document)` the first delta after a tab switch can be many seconds. With it, the delta is 0 while the page is hidden and the timer resets when it returns.
 - Clamp `dt` in anything that integrates: a 2-second stall fed to a spring or a rail speed teleports the object.
 - `timer.setTimescale(0.25)` scales both delta and elapsed (slow motion). Pause by setting it to 0. `getTimescale()` reads it back.
@@ -388,6 +389,7 @@ material.colorNode = mix(color(0x202030), color(0xffd24a), easeInOutCubic(oscSin
 - `camera.fov = 30;` → `camera.fov = 30; camera.updateProjectionMatrix();`: the projection matrix is rebuilt only on request.
 - `camera.position.x += (Math.random() - 0.5) * strength` for shake → time-sampled noise applied on top of a base pose recomputed every frame: per-frame random offsets depend on the frame rate and accumulate.
 - Animating the camera while `controls.update()` runs → `controls.enabled = false` and skip `controls.update()` during the shot: OrbitControls rewrites the camera transform on each update.
+- `timer.update(timestamp)` after slow setup code → `timer.update()`: the first frame's rAF timestamp can predate the timer's construction, giving a negative delta that runs every integrator and path fraction backwards.
 
 ## See Also
 
