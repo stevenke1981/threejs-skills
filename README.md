@@ -2,6 +2,8 @@
 
 English · [繁體中文](README.zh-TW.md)
 
+A fork of [CloudAI-X/threejs-skills](https://github.com/CloudAI-X/threejs-skills) that adds the math skills in `math-skills/`, a reference example and a Traditional Chinese guide.
+
 Skill files that give Claude Code current, verified knowledge of three.js, so the code it writes runs on the release you actually install.
 
 The skills target **three.js r186** (`three@0.186`), React Three Fiber 9.8 with drei 10.7, and gltf-transform 4.5. Rendering examples use `WebGLRenderer`, directly or through React Three Fiber; the WebGPU and TSL section in every skill covers `WebGPURenderer`.
@@ -15,13 +17,13 @@ Claude Code knows three.js from its training data, which mixes many releases. A 
 With the [skills](https://skills.sh) CLI:
 
 ```bash
-npx skills add cloudai-x/threejs-skills
+npx skills add stevenke1981/threejs-skills
 
 # also the math skills in math-skills/ (the CLI only searches skills/ without --full-depth)
-npx skills add cloudai-x/threejs-skills --full-depth
+npx skills add stevenke1981/threejs-skills --full-depth
 
 # every skill, user-wide, for Claude Code, Codex and Antigravity CLI at once
-npx skills add cloudai-x/threejs-skills --full-depth -g -y --copy -s '*' -a claude-code -a codex -a antigravity-cli
+npx skills add stevenke1981/threejs-skills --full-depth -g -y --copy -s '*' -a claude-code -a codex -a antigravity-cli
 ```
 
 The last command writes to `~/.claude/skills`, `~/.agents/skills` (Codex) and `~/.gemini/config/skills` (Antigravity CLI). `--copy` avoids symlinks, which often need admin rights on Windows.
@@ -29,7 +31,7 @@ The last command writes to `~/.claude/skills`, `~/.agents/skills` (Codex) and `~
 Or manually. Claude Code loads skills from `~/.claude/skills/` (all your projects) or `.claude/skills/` (one project):
 
 ```bash
-git clone https://github.com/CloudAI-X/threejs-skills.git
+git clone https://github.com/stevenke1981/threejs-skills.git
 
 # all your projects
 mkdir -p ~/.claude/skills && cp -r threejs-skills/skills/* ~/.claude/skills/
