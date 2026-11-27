@@ -2,7 +2,7 @@
 
 [English](README.md) · 繁體中文
 
-這組技能讓 AI 程式助理（Claude Code、Codex、Antigravity CLI）掌握 **three.js r186** 的最新 API，以及產生電影級 3D 畫面所需的數學：噪聲、距離場、程序化建模、粒子模擬、運鏡與大氣散射。
+這組技能讓 AI 程式助理（Claude Code、Codex、Antigravity CLI）掌握 **three.js r187**（`threejs-math-atmosphere`、`threejs-math-motion`、`threejs-math-particles-fields` 三個技能仍為 r186、單檔結構，尚待更新；其餘技能已改為精簡的 `SKILL.md` 加 `references/`） 的最新 API，以及產生電影級 3D 畫面所需的數學：噪聲、距離場、程序化建模、粒子模擬、運鏡與大氣散射。
 
 - `skills/`：13 個 three.js 基礎技能（場景、幾何、材質、光影、著色器、後製、效能…）
 - `math-skills/`：6 個數學技能，用數學函式建模與做特效

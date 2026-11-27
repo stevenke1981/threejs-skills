@@ -1,11 +1,11 @@
 ---
 name: threejs-textures
-description: "Three.js textures: image loading, color spaces, UV channels and transforms, texture types from canvas to HDR and KTX2, render targets, texture memory. Use when working with images on materials, UV coordinates, cubemaps, render targets or texture optimization; on WebGL or with WebGPU and TSL."
+description: "Three.js texture objects: color space, wrap, repeat, filters, mipmaps, anisotropy, UV channels, Data/Canvas/Video/KTX2 compressed textures, cube and equirect env textures, PMREM mechanics, render targets, CubeCamera, texture memory and disposal. Use when a texture looks washed out or blurry, tiling, aoMap and uv2, render to texture, KTX2Loader setup. Not for the model and HDR loading flow (use threejs-loaders), scene.environment lighting (use threejs-lighting), material slots (use threejs-materials), offline compression (use threejs-asset-pipeline). 中文: 貼圖, 紋理, 色彩空間, 貼圖模糊, 貼圖重複, 渲染目標, 壓縮貼圖"
 ---
 
 # Three.js Textures
 
-Targets three.js r186. Examples use WebGLRenderer; the WebGPU and TSL section uses WebGPURenderer.
+Targets three.js r187 (npm `three@0.187.0`). Examples use WebGLRenderer unless they import from `three/webgpu`.
 
 ## Quick Start
 
@@ -21,480 +21,163 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 0, 2);
 
-// Color images must be tagged sRGB or they render too bright and washed out
+// load() returns the texture at once; the image arrives later. loadAsync() when you need it loaded.
 const texture = new THREE.TextureLoader().load("diffuse.jpg");
-texture.colorSpace = THREE.SRGBColorSpace;
+texture.colorSpace = THREE.SRGBColorSpace; // color image: without this it renders washed out
+texture.anisotropy = renderer.capabilities.getMaxAnisotropy(); // sharp at grazing angles
 
-const mesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(2, 2),
-  new THREE.MeshBasicMaterial({ map: texture }),
-);
+const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: texture }));
 scene.add(mesh);
 
-renderer.setAnimationLoop(animate);
-
-function animate() {
+renderer.setAnimationLoop(() => {
   mesh.rotation.z += 0.01;
   renderer.render(scene, camera);
-}
+});
 ```
 
-## Loading
-
-```javascript
-// load() returns the texture at once; its image arrives asynchronously
-const texture = new THREE.TextureLoader().load("diffuse.jpg");
-texture.colorSpace = THREE.SRGBColorSpace;
-mesh.material.map = texture; // before the first render; afterwards also set mesh.material.needsUpdate = true
-
-// When the next step needs the loaded image, await it
-const colorMap = await new THREE.TextureLoader().loadAsync("diffuse.jpg");
-colorMap.colorSpace = THREE.SRGBColorSpace;
-```
-
-TextureLoader's `onProgress` parameter is unsupported and never fires; a `LoadingManager` reports progress as each file finishes:
-
-```javascript
-const manager = new THREE.LoadingManager();
-manager.onProgress = (url, loaded, total) => console.log(`${loaded}/${total}: ${url}`);
-const loader = new THREE.TextureLoader(manager);
-```
+Loader choice, `LoadingManager` progress and GLTF texture handling: `threejs-loaders`.
 
 ## Color Space
 
 Color management is on by default and every texture starts at `NoColorSpace`:
 
-- LDR color images get `SRGBColorSpace`: `map`, `emissiveMap`, `specularMap`, sheen color and specular color maps, LDR matcaps, and canvas or video used as color.
-- Scalar data keeps `NoColorSpace`: normal, bump, displacement, roughness, metalness, ambient-occlusion and alpha maps.
-- HDR environments are `LinearSRGBColorSpace`; the HDR loaders set that themselves. GLTFLoader sets the color spaces of the textures it loads.
+| Texture | `colorSpace` |
+| --- | --- |
+| LDR color images: `map`, `emissiveMap`, `specularMap`, `sheenColorMap`, `specularColorMap`, LDR matcap, canvas or video used as color | `THREE.SRGBColorSpace` (set it yourself) |
+| Data: normal, bump, displacement, roughness, metalness, ao, alpha, gradient, noise, packed ORM | `THREE.NoColorSpace` (default; leave it) |
+| HDR / EXR / Ultra HDR environments and light maps | `THREE.LinearSRGBColorSpace` (the loaders set it) |
+| `CubeTextureLoader` results | `SRGBColorSpace` (the loader sets it) |
+| GLTFLoader and KTX2Loader textures | set by the loader from the file |
+
+`texture.encoding` and `THREE.sRGBEncoding` were removed (r152); `colorSpace` replaced them.
+
+## Wrap, Repeat, Filters, Mipmaps
 
 ```javascript
-const colorMap = new THREE.TextureLoader().load("color.jpg");
-colorMap.colorSpace = THREE.SRGBColorSpace; // authored color image
-
-const normalMap = new THREE.TextureLoader().load("normal.jpg");
-// normalMap stays at NoColorSpace: it is data, not color
-```
-
-## Transform: Wrap, Repeat, Offset, Rotation
-
-```javascript
-const texture = new THREE.TextureLoader().load("diffuse.jpg");
-
-// Tiling requires repeat wrapping; the default clamps edge pixels
-texture.wrapS = THREE.RepeatWrapping;
-texture.wrapT = THREE.RepeatWrapping;
-texture.repeat.set(4, 4); // tile 4x4
-
-texture.offset.set(0.5, 0.5); // shift in UV units
+texture.wrapS = THREE.RepeatWrapping; // tiling needs repeat wrapping; default ClampToEdgeWrapping
+texture.wrapT = THREE.RepeatWrapping; // MirroredRepeatWrapping flips each repeat
+texture.repeat.set(4, 4);
+texture.offset.set(0.5, 0.5); // UV units
 texture.center.set(0.5, 0.5); // pivot for rotation
 texture.rotation = Math.PI / 4; // radians
+
+texture.minFilter = THREE.LinearMipmapLinearFilter; // default: trilinear
+texture.magFilter = THREE.LinearFilter; // default; NearestFilter (both) for pixel art
+texture.generateMipmaps = false; // the only switch that stops mip generation; then use a non-mip minFilter
+texture.anisotropy = renderer.capabilities.getMaxAnisotropy(); // WebGPURenderer: renderer.getMaxAnisotropy()
 ```
 
-`MirroredRepeatWrapping` tiles with a mirror flip on each repeat.
-
-## Filtering, Mipmaps, Anisotropy
-
-```javascript
-const texture = new THREE.TextureLoader().load("diffuse.jpg");
-
-// Minification (many texture pixels per screen pixel)
-texture.minFilter = THREE.LinearMipmapLinearFilter; // default: trilinear blend between mip levels
-texture.minFilter = THREE.NearestFilter; // hard pixel look, samples only the base level
-
-// Magnification (texture magnified on screen)
-texture.magFilter = THREE.LinearFilter; // default
-texture.magFilter = THREE.NearestFilter; // pixelated
-
-// Mipmaps are generated whenever generateMipmaps is true, whatever the filters.
-// Turn generation off to save memory (UI sprites, data textures):
-texture.generateMipmaps = false;
-texture.minFilter = THREE.LinearFilter; // and do not request a mipmap filter
-
-// Sharper at grazing angles; clamp to what the hardware supports
-texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-```
-
-## Texture Types
-
-Base class from any image element:
-
-```javascript
-const image = new Image();
-image.src = "sprite.png";
-
-const imageTexture = new THREE.Texture(image);
-imageTexture.colorSpace = THREE.SRGBColorSpace;
-image.onload = () => (imageTexture.needsUpdate = true); // upload once the pixels exist
-```
-
-`DataTexture` from raw typed-array pixels. Its defaults differ from `Texture`: `NearestFilter` for both filters, `flipY` false, mipmaps off:
-
-```javascript
-const size = 256;
-const data = new Uint8Array(size * size * 4); // RGBA, one byte per channel
-for (let i = 0; i < size; i++) {
-  for (let j = 0; j < size; j++) {
-    const index = (i * size + j) * 4;
-    data[index] = i;
-    data[index + 1] = j;
-    data[index + 2] = 128;
-    data[index + 3] = 255;
-  }
-}
-const dataTexture = new THREE.DataTexture(data, size, size);
-dataTexture.needsUpdate = true;
-```
-
-`CanvasTexture` for dynamically drawn textures (sets `needsUpdate` on construction):
-
-```javascript
-const canvas = document.createElement("canvas");
-canvas.width = 256;
-canvas.height = 256;
-const ctx = canvas.getContext("2d");
-ctx.fillStyle = "#404040";
-ctx.fillRect(0, 0, 256, 256);
-ctx.fillStyle = "#ffffff";
-ctx.font = "48px sans-serif";
-ctx.fillText("Hello", 40, 150);
-
-const canvasTexture = new THREE.CanvasTexture(canvas);
-canvasTexture.colorSpace = THREE.SRGBColorSpace; // canvas colors are sRGB
-
-// after each redraw of the canvas:
-canvasTexture.needsUpdate = true;
-```
-
-`VideoTexture` for a playing `HTMLVideoElement` (re-uploads every frame, mipmaps off):
-
-```javascript
-const video = document.createElement("video");
-video.src = "video.mp4";
-video.loop = true;
-video.muted = true;
-video.play();
-
-const videoTexture = new THREE.VideoTexture(video);
-videoTexture.colorSpace = THREE.SRGBColorSpace;
-```
-
-`VideoFrameTexture` for WebCodecs: each decoded frame is pushed by hand:
-
-```javascript
-const frameTexture = new THREE.VideoFrameTexture();
-frameTexture.colorSpace = THREE.SRGBColorSpace;
-const decoder = new VideoDecoder({
-  output(frame) {
-    if (frameTexture.image instanceof VideoFrame) frameTexture.image.close(); // free the replaced frame, or decoding stalls
-    frameTexture.setFrame(frame);
-  },
-  error: (e) => console.error(e),
-});
-```
-
-`HTMLTexture` draws an HTML element through the browser's HTML-in-Canvas API: the renderer moves the element into its own canvas and re-uploads it on paint events; where the browser lacks that API the texture stays empty.
-
-## Compressed Textures (KTX2)
-
-```javascript
-import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
-
-const ktx2Loader = new KTX2Loader();
-// No setTranscoderPath call: the transcoder loads from the three package.
-// Set one only when self-hosting the decoders, pinned to this release.
-ktx2Loader.detectSupport(renderer); // required before loading; works with both renderers
-
-const compressedMap = await ktx2Loader.loadAsync("diffuse.ktx2");
-// colorSpace comes from the file's transfer function; nothing to set by hand
-```
-
-Basis Universal KTX2 transcodes to a compressed format the GPU supports: smaller uploads and less memory than PNG or JPEG, which upload uncompressed (where the GPU supports none of the targets, KTX2Loader also falls back to uncompressed RGBA). Compressed textures cannot be flipped or mipmapped at upload: `flipY` stays false, so author the file in the orientation your UVs expect, and mipmaps must be embedded in the file.
-
-## Environment Maps
-
-Cube maps (the loader tags the result sRGB itself):
-
-```javascript
-const cubeTexture = new THREE.CubeTextureLoader().load([
-  "px.jpg", "nx.jpg", // +X, -X
-  "py.jpg", "ny.jpg", // +Y, -Y
-  "pz.jpg", "nz.jpg", // +Z, -Z
-]);
-
-scene.background = cubeTexture;
-scene.environment = cubeTexture; // lights Standard and Physical materials (WebGLRenderer also Lambert and Phong)
-```
-
-HDR equirectangular files — set `mapping`, then assign; both renderers prefilter the environment themselves:
-
-```javascript
-import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
-
-const env = await new HDRLoader().loadAsync("environment.hdr");
-env.mapping = THREE.EquirectangularReflectionMapping; // without it the background draws as a flat screen quad
-scene.environment = env;
-scene.background = env;
-```
-
-`EXRLoader` (`three/addons/loaders/EXRLoader.js`) loads `.exr` files the same way and `UltraHDRLoader` loads Ultra HDR JPEGs; both set their own linear color space.
-
-Scene-level controls:
-
-```javascript
-scene.environmentIntensity = 0.5; // dim the image-based lighting
-scene.environmentRotation.y = Math.PI / 4;
-
-scene.backgroundBlurriness = 0.5; // 0-1
-scene.backgroundIntensity = 1.0;
-scene.backgroundRotation.y = Math.PI;
-```
-
-Both renderers convert an equirectangular environment into a cube map with a larger texture internally (better sampling, more memory); when memory matters, ship a lower-resolution equirect file.
-
-`PMREMGenerator` is for generated environments — a scene such as `RoomEnvironment` captured with `fromScene`:
-
-```javascript
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-
-const pmrem = new THREE.PMREMGenerator(renderer);
-const room = new RoomEnvironment();
-scene.environment = pmrem.fromScene(room, 0.04).texture;
-room.dispose(); // frees the room's geometries and materials
-pmrem.dispose();
-```
-
-Do not run a loaded equirect file through PMREMGenerator "for better reflections" — direct assignment with `mapping` set produces the same prefiltering.
-
-## Render Targets
-
-```javascript
-const renderTarget = new THREE.WebGLRenderTarget(512, 512);
-const rtScene = new THREE.Scene(); // must not contain the mesh that samples the target
-rtScene.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshNormalMaterial())); // unlit, visible without lights
-
-renderer.setRenderTarget(renderTarget);
-renderer.render(rtScene, camera);
-renderer.setRenderTarget(null); // back to the canvas
-
-// the output is a texture like any other
-mesh.material.map = renderTarget.texture;
-```
-
-Depth buffer as a texture:
-
-```javascript
-const depthTarget = new THREE.WebGLRenderTarget(512, 512);
-depthTarget.depthTexture = new THREE.DepthTexture(512, 512); // default type UnsignedIntType
-```
-
-MSAA and multiple attachments:
-
-```javascript
-// MSAA: resolved into .texture automatically after rendering
-const msaaTarget = new THREE.WebGLRenderTarget(512, 512, { samples: 4 });
-
-// MRT: N color attachments, read back through .textures
-const mrtTarget = new THREE.WebGLRenderTarget(512, 512, { count: 2 });
-const firstAttachment = mrtTarget.textures[0];
-const secondAttachment = mrtTarget.textures[1];
-```
-
-## Dynamic Reflections
-
-```javascript
-const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(256, {
-  generateMipmaps: true,
-  minFilter: THREE.LinearMipmapLinearFilter,
-});
-const cubeCamera = new THREE.CubeCamera(0.1, 1000, cubeRenderTarget);
-scene.add(cubeCamera);
-
-mesh.material.envMap = cubeRenderTarget.texture;
-
-// each frame: hide the reflective mesh so it does not see itself
-mesh.visible = false;
-cubeCamera.position.copy(mesh.position);
-cubeCamera.update(renderer, scene);
-mesh.visible = true;
-```
+- Mipmaps are generated whenever `generateMipmaps` is true, whatever the filters (since r170).
+- Non-power-of-two sizes are fine: WebGL 2 and WebGPU support mipmaps and repeat wrapping on them.
+- Changing wrap, filter, `flipY` or the image after the first upload needs `texture.needsUpdate = true`; `offset`, `repeat`, `rotation` and `center` do not.
+- New in r187: `texture.mipmapsAutoUpdate` (default `true`); set `false` to stop the renderer regenerating mips after uploads or render-to-texture when you write the levels yourself.
 
 ## UV Channels
 
-Every UV-mapped material texture samples the UV attribute chosen by `texture.channel`: `0` reads `uv` (the default), `1` reads `uv1`, `2` reads `uv2`, `3` reads `uv3`. So `aoMap` and `lightMap` work on the default `uv` set; a separately unwrapped set goes in `uv1` with the texture pointed at it:
+Every material texture samples the UV attribute chosen by `texture.channel`: `0` reads `uv` (default), `1` reads `uv1`, `2` reads `uv2`, `3` reads `uv3`. `aoMap` and `lightMap` therefore work on the default `uv`; only a separate bake unwrap goes in `uv1`:
 
 ```javascript
-const aoTexture = new THREE.TextureLoader().load("ao.jpg");
-
+const aoTexture = new THREE.TextureLoader().load("ao.jpg"); // data: keep NoColorSpace
 const geometry = new THREE.BoxGeometry(1, 1, 1);
-const uvAttribute = geometry.attributes.uv;
-const aoUvs = new Float32Array(uvAttribute.count * 2); // fill with the second unwrap
-geometry.setAttribute("uv1", new THREE.BufferAttribute(aoUvs, 2));
-
-const material = new THREE.MeshStandardMaterial({ aoMap: aoTexture });
-material.aoMap.channel = 1; // sample "uv1" instead of "uv"
-const aoMesh = new THREE.Mesh(geometry, material);
-scene.add(aoMesh);
+geometry.setAttribute("uv1", new THREE.BufferAttribute(new Float32Array(geometry.attributes.uv.count * 2), 2)); // fill with the bake unwrap
+aoTexture.channel = 1; // sample "uv1" instead of "uv"
+const aoMesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ aoMap: aoTexture }));
 ```
 
-## Texture Atlas
+GLTFLoader maps `TEXCOORD_1` to `uv1` and sets `channel` itself. Since r151 `uv2` is not special: the old "copy uv into uv2 for aoMap" step is obsolete.
 
-One image, many sprites, each selected with offset and repeat:
+## Choosing a Texture Type
+
+| Source | Class | Notes |
+| --- | --- | --- |
+| Image file | `TextureLoader` → `Texture` | flipY true, mipmaps on |
+| Typed array pixels | `DataTexture` | Nearest filters, flipY false, mipmaps off, `needsUpdate = true` after filling |
+| 2D canvas | `CanvasTexture` | `needsUpdate = true` after each redraw |
+| `<video>` | `VideoTexture` | updates itself per decoded frame, mipmaps off |
+| WebCodecs `VideoFrame` | `VideoFrameTexture` | push frames with `setFrame()`, close the old one |
+| HTML element | `HTMLTexture` | HTML-in-Canvas API; empty where the browser lacks it |
+| GPU-compressed file | `KTX2Loader` → `CompressedTexture` | smaller memory; needs `detectSupport(renderer)` |
+| Six images / equirect HDR | `CubeTextureLoader` / `HDRLoader` | environment textures |
+| Rendered by three.js | `WebGLRenderTarget.texture` / `RenderTarget.texture` | render to texture |
+
+Code for each, KTX2 setup and atlases: `references/texture-types.md`.
+
+## Environment Textures (summary)
+
+- An equirectangular texture must get `texture.mapping = THREE.EquirectangularReflectionMapping` before use as `scene.background`, `scene.environment` or `envMap`; without it a background draws as a flat screen quad.
+- Both renderers convert equirect and cube environments to a PMREM themselves for PBR materials; do not pre-run a loaded file through `PMREMGenerator`. Use `PMREMGenerator` for generated scenes (`RoomEnvironment`).
+- r187 rebuilt PMREM on cube render targets: `CubeUVReflectionMapping` is gone and PBR reflections look slightly different from r186.
+
+Cube maps, PMREM mechanics, HDR formats and memory: `references/environment-textures.md`. Assigning `scene.environment`, intensity and rotation: `threejs-lighting`.
+
+## Render Targets (summary)
 
 ```javascript
-const atlas = await new THREE.TextureLoader().loadAsync("atlas.png");
-atlas.colorSpace = THREE.SRGBColorSpace;
-// filtering and mipmaps sample across sprite borders: leave padding around each sprite
-
-// one clone per sprite: clones share the image source, so WebGLRenderer uploads it once
-function spriteTexture(row, col, gridSize = 2) {
-  const sprite = atlas.clone();
-  sprite.offset.set(col / gridSize, 1 - (row + 1) / gridSize);
-  sprite.repeat.set(1 / gridSize, 1 / gridSize);
-  return sprite;
-}
-
-mesh.material.map = spriteTexture(0, 0); // top-left sprite of a 2x2 sheet
+const renderTarget = new THREE.WebGLRenderTarget(512, 512, { samples: 4 }); // MSAA resolved into .texture
+renderer.setRenderTarget(renderTarget);
+renderer.render(rtScene, rtCamera); // rtScene must not contain the mesh that samples the target
+renderer.setRenderTarget(null);
+screenMesh.material.map = renderTarget.texture;
 ```
 
-## Standard Material Slots
-
-Channel conventions worth knowing: `aoMap` reads red, `roughnessMap` reads green, `metalnessMap` reads blue (so one packed occlusion-roughness-metalness image works); `alphaMap` reads green.
-
-```javascript
-const colorMap = new THREE.TextureLoader().load("color.jpg");
-const emissiveMap = new THREE.TextureLoader().load("emissive.jpg");
-const normalMap = new THREE.TextureLoader().load("normal.jpg");
-colorMap.colorSpace = THREE.SRGBColorSpace;
-emissiveMap.colorSpace = THREE.SRGBColorSpace;
-// normalMap keeps NoColorSpace, as do roughness, metalness, ao, alpha and displacement maps
-
-const material = new THREE.MeshStandardMaterial({
-  map: colorMap,
-  normalMap: normalMap,
-  normalScale: new THREE.Vector2(1, 1),
-  emissiveMap: emissiveMap,
-  emissive: 0xffffff, // non-black, so the emissive map contributes
-  roughness: 1, // scalar multipliers for the matching maps
-  metalness: 0,
-});
-
-material.aoMap = new THREE.TextureLoader().load("ao.jpg");
-material.aoMapIntensity = 1;
-```
-
-`alphaMap` takes effect with `transparent: true` (blended) or `alphaTest` (cut out); `displacementMap` scales with `displacementScale` and `displacementBias` and wants a subdivided mesh; `normalMapType` defaults to `TangentSpaceNormalMap`, set `ObjectSpaceNormalMap` for object-space normal maps.
+Depth textures, MRT (`count`), cube targets with CubeCamera, the WebGPU classes (`RenderTarget`, `CubeRenderTarget`) and resizing: `references/render-targets.md`.
 
 ## Disposal and Memory
 
-`texture.dispose()` frees the GPU upload once no other undisposed texture shares it (the atlas clones above share one); the image object remains. Dispose only textures that no other material still uses:
+`texture.dispose()` frees the GPU upload once no other undisposed texture shares the same source (clones share it); the image stays in JS memory. `material.dispose()` does not dispose its textures.
 
 ```javascript
 function disposeMaterial(material) {
-  for (const key of Object.keys(material)) {
-    const value = material[key];
-    if (value && value.isTexture) {
-      value.dispose();
-    }
+  for (const value of Object.values(material)) {
+    if (value && value.isTexture) value.dispose(); // only if no other material still uses it
   }
   material.dispose();
 }
+console.log(renderer.info.memory.textures); // textures currently on the GPU (WebGLRenderer)
 ```
 
-```javascript
-console.log(renderer.info.memory.textures); // texture count currently on the GPU
-console.log(renderer.capabilities.maxTextureSize); // largest supported dimension
-```
-
-Share one texture instance across materials rather than loading per mesh. Non-power-of-two sizes are fine: WebGL 2 supports mipmaps and repeat wrapping on them.
+GPU memory is width x height x 4 bytes for RGBA8, x 1.33 with mipmaps, whatever the file size; a 4096² JPEG costs about 85 MiB. Use KTX2, smaller sizes, and share one texture instance across materials. Budgeting strategy: `threejs-performance`.
 
 ## WebGPU and TSL
 
-```javascript
-import * as THREE from "three/webgpu";
-import { texture, uv } from "three/tsl";
+Textures, loaders and color spaces work the same under WebGPURenderer. Differences:
 
-const renderer = new THREE.WebGPURenderer({ antialias: true });
-await renderer.init(); // before any other use of the renderer
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111111); // the WebGPU canvas starts transparent
-
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 0, 2);
-
-const map = new THREE.TextureLoader().load("diffuse.jpg");
-map.colorSpace = THREE.SRGBColorSpace;
-map.anisotropy = renderer.getMaxAnisotropy(); // no capabilities object under WebGPU
-
-const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicNodeMaterial());
-mesh.material.colorNode = texture(map, uv().mul(0.5).add(0.25)); // custom UV transform in TSL: the center half, zoomed 2x
-scene.add(mesh);
-
-renderer.setAnimationLoop(animate);
-
-function animate() {
-  mesh.rotation.z += 0.01;
-  renderer.render(scene, camera);
-}
-```
-
-TSL sampling: `texture(map)` uses `uv()` plus the texture's own offset/repeat/rotation; an explicit node takes over the coordinates entirely. The classic slots (`map`, `normalMap`, `roughnessMap`, `aoMap`) work unchanged on node materials; `colorNode` is for custom sampling.
-
-```javascript
-import * as THREE from "three/webgpu";
-import { texture, uv } from "three/tsl";
-const map = new THREE.TextureLoader().load("diffuse.jpg");
-map.colorSpace = THREE.SRGBColorSpace;
-mesh.material.colorNode = texture(map); // uv() plus the texture's offset/repeat/rotation
-mesh.material.colorNode = texture(map, uv(1)); // explicit node: samples the "uv1" attribute
-```
-
-`KTX2Loader.detectSupport(renderer)` queries device features, so call it after `await renderer.init()`. For dynamic reflections use `CubeRenderTarget` (not `WebGLCubeRenderTarget`) with the same hide-update-show CubeCamera pattern.
-
-```javascript
-import * as THREE from "three/webgpu";
-
-const cubeRenderTarget = new THREE.CubeRenderTarget(256); // replaces WebGLCubeRenderTarget
-const cubeCamera = new THREE.CubeCamera(0.1, 1000, cubeRenderTarget);
-scene.add(cubeCamera);
-mesh.material.envMap = cubeRenderTarget.texture;
-mesh.visible = false; // hide so the mesh does not reflect itself
-cubeCamera.position.copy(mesh.position);
-cubeCamera.update(renderer, scene);
-mesh.visible = true;
-```
+- `renderer.getMaxAnisotropy()` instead of `renderer.capabilities.getMaxAnisotropy()` (no `capabilities` object).
+- `KTX2Loader.detectSupport(renderer)` reads device features, so call it after `await renderer.init()`.
+- Cube render targets: `CubeRenderTarget` from `three/webgpu`; `WebGLCubeRenderTarget` is not usable with WebGPURenderer (since r183).
+- In TSL, `texture(map)` samples `uv(map.channel)` plus the texture's offset/repeat/rotation; `texture(map, uvNode)` takes explicit coordinates and skips that transform (`uv(1)` reads `uv1`). More TSL sampling in `threejs-shaders`.
 
 ## Common Mistakes
 
-- `geometry.setAttribute("uv2", geometry.attributes.uv)` → `material.aoMap = aoTexture;`: aoMap samples the attribute picked by `texture.channel` (default 0, `uv`), so it needs no extra attribute and `uv2` is read only by textures whose `channel` is 2; only a separate baked unwrap goes in `uv1`, with `aoTexture.channel = 1`.
-- `new RGBELoader()` → `new HDRLoader()`: renamed from RGBELoader to HDRLoader in r180; the old class still runs but logs a deprecation warning.
-- `import { EXRLoader } from "three/examples/jsm/loaders/EXRLoader.js"` → `import { EXRLoader } from "three/addons/loaders/EXRLoader.js"`: the browser import maps map `three/addons/` to examples/jsm/ and define no `three/examples/` key, so the examples path fails to resolve there.
-- `texture.encoding = THREE.sRGBEncoding` → `texture.colorSpace = THREE.SRGBColorSpace`: `encoding` and the `sRGBEncoding` constant were removed; `colorSpace` replaced them.
-- `const texture = loader.load("color.jpg")` → `const texture = loader.load("color.jpg"); texture.colorSpace = THREE.SRGBColorSpace;`: an LDR color image left at `NoColorSpace` renders too bright and washed out.
-- `texture.minFilter = THREE.LinearFilter; // no mipmaps` → `texture.generateMipmaps = false;`: mipmaps are generated whenever `generateMipmaps` is true, whatever the filter, so LinearFilter alone still uploads them.
-- `texture.generateMipmaps = false; texture.wrapS = THREE.ClampToEdgeWrapping; // non-power-of-two size` → `texture.wrapS = THREE.RepeatWrapping;`: WebGL 2 supports mipmaps and repeat wrapping on non-power-of-two textures, so nothing has to be disabled for them.
-- `texture.anisotropy = renderer.capabilities.getMaxAnisotropy()` → `texture.anisotropy = renderer.getMaxAnisotropy()`: WebGPURenderer has no `capabilities` object; this is the call under WebGPU.
-- `material.envMapIntensity = 0.5` → `scene.environmentIntensity = 0.5`: `envMapIntensity` scales only the material's own `envMap`, not `scene.environment`.
-- `scene.environment = pmrem.fromEquirectangular(hdr).texture` → `hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr;`: the renderer prefilters an equirectangular environment itself, so manual PMREM of a loaded file adds nothing.
-- `scene.background = hdr` → `hdr.mapping = THREE.EquirectangularReflectionMapping; scene.background = hdr;`: without `mapping`, an equirectangular texture draws as a flat screen-space quad instead of a surround.
-- `ktx2Loader.detectSupportAsync(renderer)` → `await renderer.init(); ktx2Loader.detectSupport(renderer);`: the async variant was deprecated in r181, and support detection needs the initialized device.
-- `ktx2Loader.setTranscoderPath("libs/basis/")` → `const ktx2Loader = new KTX2Loader(); ktx2Loader.detectSupport(renderer);`: the transcoder loads from the package, so a path is only needed when self-hosting, pinned to three@0.186.0.
-- `new THREE.WebGLMultipleRenderTargets(width, height, 2)` → `new THREE.WebGLRenderTarget(width, height, { count: 2 })`: removed in r162; the attachments are `renderTarget.textures[0..count-1]`.
-- `new THREE.WebGLCubeRenderTarget(256)` → `new THREE.CubeRenderTarget(256)`: under WebGPURenderer use `CubeRenderTarget` imported from `three/webgpu`; `WebGLCubeRenderTarget` is WebGL-only.
-- `loader.load(url, onLoad, onProgress, onError)` → `manager.onProgress = (url, loaded, total) => console.log(url, loaded, total)`: TextureLoader's `onProgress` parameter is unsupported and never fires.
-- `mesh.material.map = texture; // after the mesh has rendered` → `mesh.material.map = texture; mesh.material.needsUpdate = true;`: WebGLRenderer builds a material's shader for the maps it has at its first render, so a `map` added later stays invisible until the shader is rebuilt, which `needsUpdate` forces.
-- `normalMap.colorSpace = THREE.LinearSRGBColorSpace` → `normalMap.colorSpace = THREE.NoColorSpace`: normal, roughness, metalness, ao, alpha and displacement maps hold data, not color, so they keep the default `NoColorSpace`.
-- `const texture = await new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject))` → `const texture = await loader.loadAsync(url)`: `loadAsync` is that promise, built into the `Loader` base class.
-- `cubeCamera.update(renderer, scene)` → `mesh.visible = false; cubeCamera.update(renderer, scene); mesh.visible = true;`: while visible, the reflective mesh is drawn into the cube map that its own `envMap` reads.
+- Color map left at `NoColorSpace` → `texture.colorSpace = THREE.SRGBColorSpace;`: renders too bright and washed out.
+- `normalMap.colorSpace = THREE.SRGBColorSpace` or `LinearSRGBColorSpace` → leave `NoColorSpace`: data maps must not be color-converted.
+- `texture.encoding = THREE.sRGBEncoding` → `texture.colorSpace = THREE.SRGBColorSpace`.
+- `geometry.setAttribute("uv2", geometry.attributes.uv)` for aoMap → nothing: aoMap reads `uv` unless `channel` says otherwise.
+- `texture.minFilter = THREE.LinearFilter; // no mipmaps` → `texture.generateMipmaps = false;`.
+- Disabling mipmaps or repeat "because the size is not a power of two" → not needed in WebGL 2 / WebGPU.
+- `texture.repeat.set(4, 4)` that stretches instead of tiling → also set `wrapS`/`wrapT` to `RepeatWrapping`.
+- `mesh.material.map = texture;` after the first render, map invisible → also `mesh.material.needsUpdate = true;` (WebGLRenderer compiled the shader without a map).
+- Blurry texture on a floor at grazing angles → raise `anisotropy` to the hardware maximum.
+- `scene.background = hdr` drawn as a flat quad → set `hdr.mapping = THREE.EquirectangularReflectionMapping` first.
+- `scene.environment = pmrem.fromEquirectangular(hdr).texture` for a loaded file → assign `hdr` (with `mapping` set) directly; the renderer prefilters it.
+- `ktx2Loader.detectSupportAsync(renderer)` → `await renderer.init(); ktx2Loader.detectSupport(renderer);` (async variant deprecated r181).
+- Loading a `.ktx2` without `detectSupport` → throws `Missing initialization with .detectSupport( renderer )`.
+- `new THREE.WebGLMultipleRenderTargets(w, h, 2)` → `new THREE.WebGLRenderTarget(w, h, { count: 2 })` (removed r162).
+- `new THREE.WebGLCubeRenderTarget(256)` with WebGPURenderer → `new THREE.CubeRenderTarget(256)` from `three/webgpu`.
+- CubeCamera reflection showing the reflective object itself → hide it around `cubeCamera.update(renderer, scene)`.
+- `texture.anisotropy = renderer.capabilities.getMaxAnisotropy()` under WebGPURenderer → `renderer.getMaxAnisotropy()`.
+
+## Reference Files
+
+- `references/texture-types.md` - Texture from an image element, DataTexture, CanvasTexture, VideoTexture, VideoFrameTexture, HTMLTexture, KTX2 compressed textures, atlases, material slot channel conventions. Open when creating textures from code or setting up KTX2.
+- `references/environment-textures.md` - cube textures, equirect mapping, HDR/EXR/Ultra HDR, PMREMGenerator mechanics in r187, environment texture memory. Open when building or debugging environment and reflection textures.
+- `references/render-targets.md` - render-to-texture, depth textures, MSAA, MRT, depth-only targets, cube render targets and CubeCamera, WebGPU equivalents, resizing and disposal. Open for any offscreen rendering.
 
 ## See Also
 
-- `threejs-materials` — material properties, blending, and physical materials beyond texture slots.
-- `threejs-loaders` — loading managers, glTF models, and the loader family generally.
-- `threejs-shaders` — custom GLSL texture sampling under WebGLRenderer.
-- `threejs-lighting` — environment lighting and light units.
-- `threejs-asset-pipeline` — encoding a model's textures to KTX2, WebP or AVIF with gltf-transform.
+- `threejs-materials` - which material slot takes which texture
+- `threejs-loaders` - TextureLoader, HDR/EXR loaders, GLTFLoader with KTX2, LoadingManager progress
+- `threejs-lighting` - scene.environment, IBL intensity and rotation
+- `threejs-shaders` - sampling textures in GLSL and TSL
+- `threejs-asset-pipeline` - encoding textures to KTX2, WebP or AVIF offline
+- `threejs-performance` - texture memory budgets
